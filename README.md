@@ -8,6 +8,9 @@ It currently supports these element types:
 - text button
 - image
 
+## Screenshots
+![image](https://github.com/nekromoff/layouter/assets/8550349/4f31272d-c69b-4bba-a109-d14f823fb5c8)
+
 ## Usage
 
 ### 1. Include layouter
