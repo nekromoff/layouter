@@ -76,3 +76,19 @@ function love.mousepressed(x, y, mouse_button, is_touch)
     layouter.processMouse(x, y, mouse_button, is_touch)
 end
 ```
+
+### Grid positioning - columns and rows
+The grid comes with 24 columns and 16 rows.
+Layouter automatically calculates sizes of columns and rows and generates helper variables.
+You can use these helper variables to position your elements and layout easily:
+```
+-- columns:
+layouter.COLUMN1 -- first column's right side, i.e. will position element right after first column
+-- ...
+layouter.COLUMN8 -- X position after width of eight columns
+
+--- rows:
+layouter.ROW1 -- Y position after height of a first row
+-- ...
+layouter.ROW4 -- Y position after height of four rows
+```
