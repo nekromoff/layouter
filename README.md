@@ -62,7 +62,7 @@ layouter.prepare({x = layouter.COLUMN6, y = layouter.ROW4, direction = 'vertical
 ### 5.Draw your layout
 ```
 function love.draw()
-	layouter.draw()
+    layouter.draw()
 end
 ```
 
@@ -70,6 +70,6 @@ end
 This functions needs to be called to enable interaction for buttons.
 ```
 function love.mousepressed(x, y, mouse_button, is_touch)
-	layouter.processMouse(x, y, mouse_button, is_touch)
+    layouter.processMouse(x, y, mouse_button, is_touch)
 end
 ```
