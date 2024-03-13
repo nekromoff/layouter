@@ -129,7 +129,7 @@ layouter.prepare = function(layout)
     layout.x = layout.x or false
     layout.y = layout.y or false
     layout.width, layout.height = love.window.getMode()
-    layout.direction = direction or 'vertical'
+    layout.direction = layout.direction or 'vertical'
     layout.spacing = layout.spacing or {width = layout.width, height = layout.height}
     layout.padding = layout.padding or 10
     if layout.spacing == 'auto' then
@@ -150,7 +150,7 @@ layouter.prepare = function(layout)
         local prepared_element = table.copy(element)
         -- do automatic layout, if x and y not set directly
         if prepared_element.x == false and prepared_element.y == false then
-            if direction == 'horizontal' then
+            if layout.direction == 'horizontal' then
                 prepared_element.width = fit_width
                 prepared_element.height = fit_height
                 prepared_element.x = layout.padding + last_x
