@@ -17,6 +17,7 @@ local layouter = {
     COLUMNS = 24,
     elements = {},
     _layout = {},
+    _helpers = {},
 }
 
 -- @param table options
@@ -27,15 +28,15 @@ layouter.initialize = function(options)
     layouter.color = options.color or {0, 0, 0}
     layouter.debug = options.debug or false
     local width, height = love.window.getMode()
-    layouter.COLUMN_WIDTH = math.round(width / layouter.COLUMNS)
-    layouter.ROW_HEIGHT = math.round(height / layouter.ROWS)
+    layouter.COLUMN_WIDTH = layouter._helpers.math_round(width / layouter.COLUMNS)
+    layouter.ROW_HEIGHT = layouter._helpers.math_round(height / layouter.ROWS)
     -- precalculate pixels for each column/row to allow for using shortcuts, e.g. layouter.COLUMN5 or layouter.ROW2
     -- (yeah, similar to Bootstrap CSS grid)
     for column = 1, layouter.COLUMNS do
-        _G.layouter['COLUMN'..column] = layouter.COLUMN_WIDTH * column
+        layouter['COLUMN'..column] = layouter.COLUMN_WIDTH * column
     end
     for row = 1, layouter.ROWS do
-        _G.layouter['ROW'..row] = layouter.ROW_HEIGHT * row
+        layouter['ROW'..row] = layouter.ROW_HEIGHT * row
     end
     layouter.reset()
 end
@@ -138,16 +139,16 @@ layouter.prepare = function(layout)
     -- remember current state
     layouter._previous = {x = layout.x, y = layout.y, direction = layout.direction, spacing = layout.spacing, padding = layout.padding}
     if layout.direction == 'horizontal' then
-        fit_width = layout.spacing.width / tableLength(layouter.elements) - layout.padding * 2
+        fit_width = layout.spacing.width / layouter._helpers.table_length(layouter.elements) - layout.padding * 2
         fit_height = layouter.font:getHeight() + layout.padding * 2
     else -- vertical
         fit_width = layout.spacing.width - layout.padding * 2
-        fit_height = layout.spacing.height / tableLength(layouter.elements) - layout.padding * 2
+        fit_height = layout.spacing.height / layouter._helpers.table_length(layouter.elements) - layout.padding * 2
     end
     local last_x = layout.x
     local last_y = layout.y
     for key, element in ipairs(layouter.elements) do
-        local prepared_element = table.copy(element)
+        local prepared_element = layouter._helpers.table_copy(element)
         -- do automatic layout, if x and y not set directly
         if prepared_element.x == false and prepared_element.y == false then
             if layout.direction == 'horizontal' then
@@ -186,7 +187,7 @@ layouter.draw = function()
     end
     love.graphics.setColor(love.math.colorFromBytes(layouter.color))
     for key, element in pairs(layouter._layout) do
-        local content_y = math.round(element.y + element.height / 5 * 2)
+        local content_y = layouter._helpers.math_round(element.y + element.height / 5 * 2)
         if element.type == 'button' then
             if x >= element.x and x <= element.x + element.width and y >= element.y and y <= element.y + element.height then
                 love.graphics.setColor(love.math.colorFromBytes(element.color))
@@ -221,6 +222,34 @@ layouter.processMouse = function(x, y, mouse_button, is_touch)
             element.callback()
         end
     end
+end
+
+layouter._helpers.math_round = function(number, decimal_places)
+    local multiplicator = 10 ^ (decimal_places or 0)
+    return math.floor(number * multiplicator + 0.5) / multiplicator
+end
+
+layouter._helpers.table_length = function(table)
+    local count = 0
+    for _ in pairs(table) do
+        count = count + 1
+    end
+    return count
+end
+
+layouter._helpers.table_copy = function (orig)
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' then
+        copy = {}
+        for orig_key, orig_value in next, orig, nil do
+            copy[layouter._helpers.table_copy(orig_key)] = layouter._helpers.table_copy(orig_value)
+        end
+        setmetatable(copy, layouter._helpers.table_copy(getmetatable(orig)))
+    else -- number, string, boolean, etc
+        copy = orig
+    end
+    return copy
 end
 
 return layouter
