@@ -22,12 +22,32 @@ local layouter = {
 
 -- @param table options
 layouter.initialize = function(options)
-    local options = options or {}
+    options = options or {}
     layouter.font = options.font or love.graphics.newFont(15)
     layouter.background = options.background or {255, 255, 255}
     layouter.color = options.color or {0, 0, 0}
     layouter.debug = options.debug or false
     local width, height = love.window.getMode()
+    layouter._calculateGrid(width, height)
+    layouter.reset()
+end
+
+-- recalculate grid, to be used in love.resize() function
+-- @param number new window width
+-- @param number new window height
+layouter.resize = function(width, height)
+    if width == nil or height == nil then
+        width, height = love.window.getMode()
+    end
+    layouter._calculateGrid(width, height)
+    -- reflow already added elements using the remembered layout options
+    if layouter._previous then
+        layouter.prepare()
+    end
+end
+
+-- calculate column/row sizes and precalculate pixel shortcuts
+layouter._calculateGrid = function(width, height)
     layouter.COLUMN_WIDTH = layouter._helpers.math_round(width / layouter.COLUMNS)
     layouter.ROW_HEIGHT = layouter._helpers.math_round(height / layouter.ROWS)
     -- precalculate pixels for each column/row to allow for using shortcuts, e.g. layouter.COLUMN5 or layouter.ROW2
@@ -38,7 +58,6 @@ layouter.initialize = function(options)
     for row = 1, layouter.ROWS do
         layouter['ROW'..row] = layouter.ROW_HEIGHT * row
     end
-    layouter.reset()
 end
 
 layouter.reset = function()
@@ -49,19 +68,21 @@ end
 
 -- add element to layout
 -- @param nil/string/table element options
+-- @return string key assigned to the element
 layouter.add = function (element)
-    local element = layouter._createElement(element)
+    element = layouter._createElement(element)
     layouter.elements[#layouter.elements + 1] = element
+    return element.key
 end
 
 -- replace existing element in layout by a new one
 -- @param string existing element_key
 -- @param nil/string/table element options
 layouter.replace = function(element_key, element)
-    local element = layouter._createElement(element)
-    for temp_key, temp_element in pairs(layouter.elements) do
-        if temp_element.key == element_key then
-            layouter.elements[temp_key] = element
+    local replacement = layouter._createElement(element, element_key)
+    for temp_key = 1, #layouter.elements do
+        if layouter.elements[temp_key].key == element_key then
+            layouter.elements[temp_key] = replacement
         end
     end
     -- call prepare automatically to update screen on next draw (prepare remembers previous state)
@@ -71,20 +92,24 @@ end
 -- remove existing element from layout
 -- @param string existing element_key
 layouter.remove = function(element_key)
-    for key, element in pairs(layouter.elements) do
-        if element.key == element_key then
+    -- iterate backwards, removal shifts all following indexes
+    for key = #layouter.elements, 1, -1 do
+        if layouter.elements[key].key == element_key then
             table.remove(layouter.elements, key)
         end
     end
+    -- keep the drawn layout in sync, same as replace() does
+    layouter.prepare()
 end
 
 -- setup an element to be added to layout
--- @param string existing element_key
-layouter._createElement = function(element)
+-- @param nil/string/table element options
+-- @param nil/string key to force (used by replace)
+layouter._createElement = function(element, forced_key)
     -- change empty content for adding text to proper table
     if element == nil then
         element = {}
-        element.content = '';
+        element.content = ''
     elseif type(element) == 'string' then -- change simplified format for adding text to proper table
         local temp_content = element
         element = {}
@@ -93,23 +118,37 @@ layouter._createElement = function(element)
     element.content = element.content or ''
     element.type = element.type or 'text'
     element.callback = element.callback or false
-    element.font = element.font or layouter.font
+    element.font = element.font or layouter.font or love.graphics.getFont()
     element.color = element.color or layouter.color
     element.background = element.background or layouter.background
+    element.align = element.align or 'center'
+    element.key = forced_key or element.key
     if element.key == nil then
-        -- generate unique identifier / key using only a-z0-9_
-        element.key = string.gsub(element.content:lower(), '%W', '')
+        element.key = layouter._helpers.unique_key(element)
+    end
+    -- grid shortcuts: column/row are offsets in cells, identical to the layouter.COLUMNn/ROWn constants
+    -- (column = 6 is the same X as layouter.COLUMN6, column = 0 is the left edge); spans are counted in cells
+    if element.column then
+        element.x = layouter.COLUMN_WIDTH * element.column
+        element.width = element.width or layouter.COLUMN_WIDTH * (element.column_span or 1)
+    end
+    if element.row then
+        element.y = layouter.ROW_HEIGHT * element.row
+        element.height = element.height or layouter.ROW_HEIGHT * (element.row_span or 1)
     end
     element.x = element.x or false
     element.y = element.y or false
-    -- if exact location is provided, precalculate dimensions
-    if element.x and element.y and element.width == nil and element.height == nil then
+    -- if exact location is provided, precalculate missing dimensions
+    if (element.x or element.y) and (element.width == nil or element.height == nil) then
+        local width, height
         if element.type == 'image' then
-            element.width, element.height = element.content:getDimensions()
+            width, height = element.content:getDimensions()
         else
-            temp_text = love.graphics.newText(element.font, element.content)
-            element.width, element.height = temp_text:getDimensions()
+            local temp_text = love.graphics.newText(element.font, element.content)
+            width, height = temp_text:getDimensions()
         end
+        element.width = element.width or width
+        element.height = element.height or height
     end
     return element
 end
@@ -118,52 +157,69 @@ end
 -- @param table layout options
 layouter.prepare = function(layout)
     layouter._layout = {}
-    local layout = layout or {}
-    -- if previous state exists and was not reset, use it
+    layout = layout or {}
+    -- fill in whatever the caller did not specify from the previous state, if it was not reset
     if layouter._previous then
-        layout.x = layouter._previous.x
-        layout.y = layouter._previous.y
-        layout.direction = layouter._previous.direction
-        layout.spacing = layouter._previous.spacing
-        layout.padding = layouter._previous.padding
+        layout.x = layout.x or layouter._previous.x
+        layout.y = layout.y or layouter._previous.y
+        layout.direction = layout.direction or layouter._previous.direction
+        layout.spacing = layout.spacing or layouter._previous.spacing
+        layout.padding = layout.padding or layouter._previous.padding
     end
-    layout.x = layout.x or false
-    layout.y = layout.y or false
+    layout.x = layout.x or 0
+    layout.y = layout.y or 0
     layout.width, layout.height = love.window.getMode()
     layout.direction = layout.direction or 'vertical'
-    layout.spacing = layout.spacing or {width = layout.width, height = layout.height}
     layout.padding = layout.padding or 10
     if layout.spacing == 'auto' then
+        -- center the elements: leave the same gap on the opposite side as before x/y
         layout.spacing = {width = layout.width - layout.x * 2, height = layout.height - layout.y * 2}
+    elseif layout.spacing == nil then
+        -- default: everything from x/y to the opposite window edge
+        layout.spacing = {width = layout.width - layout.x, height = layout.height - layout.y}
     end
     -- remember current state
     layouter._previous = {x = layout.x, y = layout.y, direction = layout.direction, spacing = layout.spacing, padding = layout.padding}
-    if layout.direction == 'horizontal' then
-        fit_width = layout.spacing.width / layouter._helpers.table_length(layouter.elements) - layout.padding * 2
-        fit_height = layouter.font:getHeight() + layout.padding * 2
-    else -- vertical
-        fit_width = layout.spacing.width - layout.padding * 2
-        fit_height = layout.spacing.height / layouter._helpers.table_length(layouter.elements) - layout.padding * 2
+    -- only automatically positioned elements share the available space
+    local automatic = 0
+    local line_height = 0
+    for _, element in ipairs(layouter.elements) do
+        if element.x == false and element.y == false then
+            automatic = automatic + 1
+            line_height = math.max(line_height, element.font:getHeight())
+        end
+    end
+    local fit_width, fit_height
+    if automatic > 0 then
+        if layout.direction == 'horizontal' then
+            fit_width = layout.spacing.width / automatic - layout.padding * 2
+            fit_height = line_height + layout.padding * 2
+        else -- vertical
+            fit_width = layout.spacing.width - layout.padding * 2
+            fit_height = layout.spacing.height / automatic - layout.padding * 2
+        end
     end
     local last_x = layout.x
     local last_y = layout.y
-    for key, element in ipairs(layouter.elements) do
+    for _, element in ipairs(layouter.elements) do
         local prepared_element = layouter._helpers.table_copy(element)
         -- do automatic layout, if x and y not set directly
         if prepared_element.x == false and prepared_element.y == false then
+            prepared_element.width = fit_width
+            prepared_element.height = fit_height
             if layout.direction == 'horizontal' then
-                prepared_element.width = fit_width
-                prepared_element.height = fit_height
                 prepared_element.x = layout.padding + last_x
                 prepared_element.y = layout.y
+                last_x = prepared_element.x + prepared_element.width + layout.padding
             else
-                prepared_element.width = fit_width
-                prepared_element.height = fit_height
                 prepared_element.x = layout.x + layout.padding
                 prepared_element.y = layout.padding + last_y
+                last_y = prepared_element.y + prepared_element.height + layout.padding
             end
-            last_x = prepared_element.x + prepared_element.width + layout.padding
-            last_y = prepared_element.y + prepared_element.height + layout.padding
+        else
+            -- partially positioned element: fill the missing coordinate from the layout
+            prepared_element.x = prepared_element.x or layout.x
+            prepared_element.y = prepared_element.y or layout.y
         end
         layouter._layout[#layouter._layout + 1] = prepared_element
     end
@@ -172,39 +228,46 @@ end
 -- draw a layout, to be used in love.draw() function
 layouter.draw = function()
     local x, y = love.mouse.getPosition()
-    love.graphics.clear(layouter.background)
-    love.graphics.setColor(love.math.colorFromBytes(layouter.color))
+    love.graphics.clear(love.math.colorFromBytes(layouter.background))
     if layouter.debug then
         love.graphics.setColor(love.math.colorFromBytes(176, 176, 176))
         love.graphics.setFont(layouter.font)
+        local grid_width = layouter.COLUMNS * layouter.COLUMN_WIDTH
+        local grid_height = layouter.ROWS * layouter.ROW_HEIGHT
+        for column = 0, layouter.COLUMNS do
+            love.graphics.line(column * layouter.COLUMN_WIDTH, 0, column * layouter.COLUMN_WIDTH, grid_height)
+        end
+        for row = 0, layouter.ROWS do
+            love.graphics.line(0, row * layouter.ROW_HEIGHT, grid_width, row * layouter.ROW_HEIGHT)
+        end
         for column = 0, layouter.COLUMNS do
             for row = 0, layouter.ROWS do
-                love.graphics.line(column * layouter.COLUMN_WIDTH, 0, column * layouter.COLUMN_WIDTH, 16 * layouter.ROW_HEIGHT)
-                love.graphics.line(0, row * layouter.ROW_HEIGHT, 24 * layouter.COLUMN_WIDTH, row * layouter.ROW_HEIGHT)
                 love.graphics.print(column..','..row, column * layouter.COLUMN_WIDTH, row * layouter.ROW_HEIGHT)
             end
         end
     end
     love.graphics.setColor(love.math.colorFromBytes(layouter.color))
-    for key, element in pairs(layouter._layout) do
-        local content_y = layouter._helpers.math_round(element.y + element.height / 5 * 2)
+    for _, element in ipairs(layouter._layout) do
         if element.type == 'button' then
-            if x >= element.x and x <= element.x + element.width and y >= element.y and y <= element.y + element.height then
+            if layouter._helpers.is_inside(element, x, y) then
                 love.graphics.setColor(love.math.colorFromBytes(element.color))
                 love.graphics.rectangle('fill', element.x, element.y, element.width, element.height)
                 love.graphics.setColor(love.math.colorFromBytes(element.background))
-                love.graphics.printf(element.content, element.font, element.x, content_y, element.width, 'center')
             else
                 love.graphics.setColor(love.math.colorFromBytes(element.color))
                 love.graphics.rectangle('line', element.x, element.y, element.width, element.height)
-                love.graphics.printf(element.content, element.font, element.x, content_y, element.width, 'center')
             end
+            love.graphics.printf(element.content, element.font, element.x, layouter._helpers.text_y(element), element.width, element.align)
         elseif element.type == 'text' then
             love.graphics.setColor(love.math.colorFromBytes(element.color))
-            love.graphics.printf(element.content, element.font, element.x, content_y, element.width, 'center')
+            love.graphics.printf(element.content, element.font, element.x, layouter._helpers.text_y(element), element.width, element.align)
         else -- image
-            love.graphics.setColor(love.math.colorFromBytes(element.background))
-            love.graphics.draw(element.content, element.x, element.y)
+            -- images are drawn untinted (the background color used to tint them)
+            love.graphics.setColor(1, 1, 1, 1)
+            local image_width, image_height = element.content:getDimensions()
+            local scale_x = (element.width or image_width) / image_width
+            local scale_y = (element.height or image_height) / image_height
+            love.graphics.draw(element.content, element.x, element.y, 0, scale_x, scale_y)
         end
     end
 end
@@ -215,26 +278,61 @@ layouter.processMouse = function(x, y, mouse_button, is_touch)
     if mouse_button ~= 1 then
         return
     end
-    for element_key, element in pairs(layouter._layout) do
-        -- for position debug
-        -- print (element.x..'> '..x..' <'..element.x + element.width, element.y..'> '..y..' <'..element.y + element.height)
-        if element.callback ~= false and x >= element.x and x <= element.x + element.width and y >= element.y and y <= element.y + element.height then
+    for _, element in ipairs(layouter._layout) do
+        if element.callback ~= false and layouter._helpers.is_inside(element, x, y) then
             element.callback()
         end
     end
 end
 
+-- vertically center the (possibly wrapped) content within the element box
+layouter._helpers.text_y = function(element)
+    local line_height = element.font:getHeight()
+    local content_height = line_height
+    if element.width and element.width > 0 then
+        local _, lines = element.font:getWrap(element.content, element.width)
+        content_height = math.max(#lines, 1) * line_height
+    end
+    return layouter._helpers.math_round(element.y + (element.height - content_height) / 2)
+end
+
+layouter._helpers.is_inside = function(element, x, y)
+    if not element.width or not element.height then
+        return false
+    end
+    return x >= element.x and x <= element.x + element.width and y >= element.y and y <= element.y + element.height
+end
+
+-- generate identifier / key using only a-z0-9_, unique within the current layout
+layouter._helpers.unique_key = function(element)
+    local key
+    if type(element.content) == 'string' and element.content ~= '' then
+        key = string.gsub(element.content:lower(), '%W', '')
+    end
+    if key == nil or key == '' then
+        key = element.type
+    end
+    local candidate = key
+    local suffix = 1
+    while layouter._helpers.key_exists(candidate) do
+        suffix = suffix + 1
+        candidate = key..suffix
+    end
+    return candidate
+end
+
+layouter._helpers.key_exists = function(key)
+    for _, element in ipairs(layouter.elements) do
+        if element.key == key then
+            return true
+        end
+    end
+    return false
+end
+
 layouter._helpers.math_round = function(number, decimal_places)
     local multiplicator = 10 ^ (decimal_places or 0)
     return math.floor(number * multiplicator + 0.5) / multiplicator
-end
-
-layouter._helpers.table_length = function(table)
-    local count = 0
-    for _ in pairs(table) do
-        count = count + 1
-    end
-    return count
 end
 
 layouter._helpers.table_copy = function (orig)
