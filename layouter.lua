@@ -9,7 +9,7 @@ local layouter = {
     _NAME = "Layouter",
     _DESCRIPTION = 'UI Grid Layout Library for LÖVE 2D Game Engine',
     _URL = 'https://github.com/nekromoff/layouter',
-    _VERSION = 1,
+    _VERSION = 2,
     _LICENSE = "LGPL 3.0",
     _LOVE = 11.4,
     ---------------------------
