@@ -75,6 +75,18 @@ layouter.add = function (element)
     return element.key
 end
 
+-- add element into a group, i.e. into an existing (or new) row/column
+-- @param string group name
+-- @param nil/string/table element options
+-- @return string key assigned to the element
+layouter.addTo = function (group, element)
+    if type(element) ~= 'table' then
+        element = {content = element}
+    end
+    element.group = group
+    return layouter.add(element)
+end
+
 -- replace existing element in layout by a new one
 -- @param string existing element_key
 -- @param nil/string/table element options
@@ -122,6 +134,8 @@ layouter._createElement = function(element, forced_key)
     element.color = element.color or layouter.color
     element.background = element.background or layouter.background
     element.align = element.align or 'center'
+    -- elements sharing a group are laid out in one row/column
+    element.group = element.group or false
     element.key = forced_key or element.key
     if element.key == nil then
         element.key = layouter._helpers.unique_key(element)
@@ -153,6 +167,60 @@ layouter._createElement = function(element, forced_key)
     return element
 end
 
+-- split automatically positioned elements into tracks (rows in a horizontal, columns in a vertical layout)
+-- elements sharing a group stay in one track, a track wraps into more tracks when its elements
+-- would get smaller than the minimum
+-- @param table layout options
+layouter._computeTracks = function(layout)
+    -- collect the groups in the order they first appear, ungrouped elements share one implicit group
+    local groups = {}
+    local group_numbers = {}
+    for _, element in ipairs(layouter.elements) do
+        if element.x == false and element.y == false then
+            local name = element.group or ''
+            if group_numbers[name] == nil then
+                groups[#groups + 1] = {name = name, elements = {}}
+                group_numbers[name] = #groups
+            end
+            local elements = groups[group_numbers[name]].elements
+            elements[#elements + 1] = element
+        end
+    end
+    local tracks = {}
+    for _, group in ipairs(groups) do
+        local count = #group.elements
+        local line_height = 0
+        for _, element in ipairs(group.elements) do
+            line_height = math.max(line_height, element.font:getHeight())
+        end
+        local per_track = count
+        if layout.overflow == 'wrap' then
+            local available, minimum
+            if layout.direction == 'horizontal' then
+                available = layout.spacing.width
+                minimum = layout.min_width
+            else -- vertical elements are never squeezed below one line of text
+                available = layout.spacing.height
+                minimum = layout.min_height or line_height + layout.padding * 2
+            end
+            if minimum and available / count - layout.padding * 2 < minimum then
+                per_track = math.max(math.floor(available / (minimum + layout.padding * 2)), 1)
+                -- balance the tracks, so the last one is not left with a single element
+                per_track = math.ceil(count / math.ceil(count / per_track))
+            end
+        end
+        for first = 1, count, per_track do
+            -- slots, not the number of elements: a partial last track keeps the same element size
+            local track = {group = group.name, elements = {}, slots = per_track, line_height = line_height}
+            for number = first, math.min(first + per_track - 1, count) do
+                track.elements[#track.elements + 1] = group.elements[number]
+            end
+            tracks[#tracks + 1] = track
+        end
+    end
+    return tracks
+end
+
 -- prepares a layout, does all computations for elements, assigns positions, does autosizing etc.
 -- @param table layout options
 layouter.prepare = function(layout)
@@ -165,12 +233,16 @@ layouter.prepare = function(layout)
         layout.direction = layout.direction or layouter._previous.direction
         layout.spacing = layout.spacing or layouter._previous.spacing
         layout.padding = layout.padding or layouter._previous.padding
+        layout.overflow = layout.overflow or layouter._previous.overflow
+        layout.min_width = layout.min_width or layouter._previous.min_width
+        layout.min_height = layout.min_height or layouter._previous.min_height
     end
     layout.x = layout.x or 0
     layout.y = layout.y or 0
     layout.width, layout.height = love.window.getMode()
     layout.direction = layout.direction or 'vertical'
     layout.padding = layout.padding or 10
+    layout.overflow = layout.overflow or 'none'
     if layout.spacing == 'auto' then
         -- center the elements: leave the same gap on the opposite side as before x/y
         layout.spacing = {width = layout.width - layout.x * 2, height = layout.height - layout.y * 2}
@@ -179,43 +251,66 @@ layouter.prepare = function(layout)
         layout.spacing = {width = layout.width - layout.x, height = layout.height - layout.y}
     end
     -- remember current state
-    layouter._previous = {x = layout.x, y = layout.y, direction = layout.direction, spacing = layout.spacing, padding = layout.padding}
+    layouter._previous = {x = layout.x, y = layout.y, direction = layout.direction, spacing = layout.spacing,
+        padding = layout.padding, overflow = layout.overflow, min_width = layout.min_width,
+        min_height = layout.min_height}
     -- only automatically positioned elements share the available space
-    local automatic = 0
-    local line_height = 0
-    for _, element in ipairs(layouter.elements) do
-        if element.x == false and element.y == false then
-            automatic = automatic + 1
-            line_height = math.max(line_height, element.font:getHeight())
-        end
+    local tracks = layouter._computeTracks(layout)
+    local track_width
+    if layout.direction ~= 'horizontal' and #tracks > 0 then
+        -- columns divide the available width between themselves
+        track_width = layout.spacing.width / #tracks - layout.padding * 2
     end
-    local fit_width, fit_height
-    if automatic > 0 then
+    local positions = {}
+    local track_x = layout.x
+    local track_y = layout.y
+    local extent = 0
+    for track_number, track in ipairs(tracks) do
+        local last_x = track_x
+        local last_y = track_y
+        for _, element in ipairs(track.elements) do
+            local position = {track = track_number, group = track.group}
+            if layout.direction == 'horizontal' then
+                position.width = layout.spacing.width / track.slots - layout.padding * 2
+                position.height = track.line_height + layout.padding * 2
+                position.x = layout.padding + last_x
+                position.y = track_y
+                last_x = position.x + position.width + layout.padding
+                extent = math.max(extent, position.y + position.height)
+            else
+                position.width = track_width
+                position.height = layout.spacing.height / track.slots - layout.padding * 2
+                position.x = track_x + layout.padding
+                position.y = layout.padding + last_y
+                last_y = position.y + position.height + layout.padding
+                extent = math.max(extent, position.x + position.width)
+            end
+            positions[element] = position
+        end
+        -- next track starts after this one, on the other axis
         if layout.direction == 'horizontal' then
-            fit_width = layout.spacing.width / automatic - layout.padding * 2
-            fit_height = line_height + layout.padding * 2
-        else -- vertical
-            fit_width = layout.spacing.width - layout.padding * 2
-            fit_height = layout.spacing.height / automatic - layout.padding * 2
+            track_y = track_y + track.line_height + layout.padding * 3
+        else
+            track_x = track_x + track_width + layout.padding * 2
         end
     end
-    local last_x = layout.x
-    local last_y = layout.y
+    -- elements do not fit into the available space, nothing is clipped, they just run over
+    if layout.direction == 'horizontal' then
+        layouter._overflowing = extent > layout.y + layout.spacing.height + 0.001
+    else
+        layouter._overflowing = extent > layout.x + layout.spacing.width + 0.001
+    end
+    -- keep the original order, so elements are drawn in the order they were added
     for _, element in ipairs(layouter.elements) do
         local prepared_element = layouter._helpers.table_copy(element)
+        local position = positions[element]
         -- do automatic layout, if x and y not set directly
-        if prepared_element.x == false and prepared_element.y == false then
-            prepared_element.width = fit_width
-            prepared_element.height = fit_height
-            if layout.direction == 'horizontal' then
-                prepared_element.x = layout.padding + last_x
-                prepared_element.y = layout.y
-                last_x = prepared_element.x + prepared_element.width + layout.padding
-            else
-                prepared_element.x = layout.x + layout.padding
-                prepared_element.y = layout.padding + last_y
-                last_y = prepared_element.y + prepared_element.height + layout.padding
-            end
+        if position then
+            prepared_element.x = position.x
+            prepared_element.y = position.y
+            prepared_element.width = position.width
+            prepared_element.height = position.height
+            prepared_element.track = position.track
         else
             -- partially positioned element: fill the missing coordinate from the layout
             prepared_element.x = prepared_element.x or layout.x

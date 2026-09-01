@@ -171,6 +171,110 @@ check('vertical: offset column still fits the window',
 check('vertical: column starts at the layout x/y',
     offset[1].x == 200 + PADDING and offset[1].y == 100 + PADDING, offset[1].x .. ',' .. offset[1].y)
 
+-- overflow: wrapping into multiple tracks ----------------------------------
+layouter.reset()
+for index = 1, 6 do layouter.add('element ' .. index) end
+layouter.prepare({x = 0, y = 0, direction = 'horizontal', padding = PADDING})
+check('overflow defaults to none: everything stays on one row',
+    layouter._layout[1].y == layouter._layout[6].y)
+
+layouter.prepare({overflow = 'wrap', min_width = 200})
+local wrapped_layout = layouter._layout
+check('wrap: 6 elements become 2 rows of 3',
+    wrapped_layout[3].y == wrapped_layout[1].y and wrapped_layout[4].y > wrapped_layout[1].y)
+check('wrap: rows are balanced', wrapped_layout[6].y == wrapped_layout[4].y)
+check('wrap: element width comes from the slots per track',
+    math.abs(wrapped_layout[1].width - (WINDOW_WIDTH / 3 - PADDING * 2)) < 0.001, wrapped_layout[1].width)
+check('wrap: element width is above the minimum', wrapped_layout[1].width >= 200)
+check('wrap: second row starts below the first',
+    wrapped_layout[4].y >= wrapped_layout[1].y + wrapped_layout[1].height)
+check('wrap: rows do not overflow the window',
+    wrapped_layout[3].x + wrapped_layout[3].width <= WINDOW_WIDTH)
+check('wrap: track number is exposed',
+    wrapped_layout[1].track == 1 and wrapped_layout[4].track == 2, wrapped_layout[4].track)
+
+-- no wrap when the elements already meet the minimum
+layouter.prepare({overflow = 'wrap', min_width = WINDOW_WIDTH / 6 - PADDING * 2})
+check('wrap: minimum exactly met does not wrap', layouter._layout[1].y == layouter._layout[6].y)
+
+-- minimum wider than the whole area: one element per track, never zero
+layouter.prepare({overflow = 'wrap', min_width = WINDOW_WIDTH * 2})
+check('wrap: oversized minimum gives one element per track',
+    layouter._layout[1].track == 1 and layouter._layout[6].track == 6, layouter._layout[6].track)
+check('wrap: oversized minimum keeps a positive width', layouter._layout[1].width > 0)
+
+-- vertical wrapping falls back to one line of text as the minimum height ---
+layouter.reset()
+for index = 1, 20 do layouter.add('element ' .. index) end
+layouter.prepare({x = 0, y = 0, direction = 'vertical', padding = PADDING, overflow = 'none'})
+check('vertical without wrap: 20 elements are squeezed into one column',
+    layouter._layout[1].x == layouter._layout[20].x)
+check('vertical without wrap: elements get thinner than a line of text',
+    layouter._layout[1].height < layouter.font:getHeight())
+
+layouter.prepare({overflow = 'wrap'})
+local columns = layouter._layout
+check('vertical wrap: elements are at least one line high',
+    columns[1].height >= layouter.font:getHeight(), columns[1].height)
+check('vertical wrap: a second column is created', columns[20].x > columns[1].x)
+check('vertical wrap: columns divide the width',
+    math.abs(columns[1].width - (WINDOW_WIDTH / 2 - PADDING * 2)) < 0.001, columns[1].width)
+check('vertical wrap: columns are balanced', columns[10].x == columns[1].x and columns[11].x == columns[20].x)
+check('vertical wrap: columns stay inside the window',
+    columns[20].x + columns[20].width <= WINDOW_WIDTH, columns[20].x + columns[20].width)
+check('vertical wrap: column fits the height',
+    columns[10].y + columns[10].height <= WINDOW_HEIGHT, columns[10].y + columns[10].height)
+
+-- groups: adding elements into an existing row/column ----------------------
+layouter.reset()
+layouter.add({content = 'title', group = 'header'})
+layouter.addTo('menu', 'Start game')
+layouter.addTo('menu', 'Credits')
+layouter.addTo('footer', 'v1.0')
+layouter.prepare({x = 0, y = 0, direction = 'horizontal', padding = PADDING})
+local grouped = layouter._layout
+check('groups: each group is its own row',
+    grouped[1].track == 1 and grouped[2].track == 2 and grouped[3].track == 2 and grouped[4].track == 3)
+check('groups: group name is exposed', grouped[2].group == 'menu', grouped[2].group)
+check('groups: elements of one group share a row', grouped[2].y == grouped[3].y)
+check('groups: rows are ordered by first appearance', grouped[1].y < grouped[2].y and grouped[2].y < grouped[4].y)
+check('groups: a group of two splits the width, not the window',
+    math.abs(grouped[2].width - (WINDOW_WIDTH / 2 - PADDING * 2)) < 0.001, grouped[2].width)
+check('groups: a group of one takes the full width',
+    math.abs(grouped[1].width - (WINDOW_WIDTH - PADDING * 2)) < 0.001, grouped[1].width)
+
+-- an element added later joins the existing row
+layouter.addTo('menu', 'Quit')
+layouter.prepare()
+check('groups: later element joins the existing row',
+    layouter._layout[3].y == layouter._layout[5].y and layouter._layout[5].group == 'menu')
+check('groups: the row is resized for the new element',
+    math.abs(layouter._layout[3].width - (WINDOW_WIDTH / 3 - PADDING * 2)) < 0.001, layouter._layout[3].width)
+check('groups: addTo returns the key', layouter.addTo('menu', 'Options') == 'options')
+
+-- ungrouped elements keep sharing one implicit track
+layouter.reset()
+layouter.add('one')
+layouter.addTo('menu', 'two')
+layouter.add('three')
+layouter.prepare({x = 0, y = 0, direction = 'horizontal', padding = PADDING})
+check('groups: ungrouped elements share one track',
+    layouter._layout[1].track == 1 and layouter._layout[3].track == 1)
+check('groups: grouped element gets its own track', layouter._layout[2].track == 2)
+
+-- overflow flag ------------------------------------------------------------
+layouter.reset()
+for index = 1, 3 do layouter.add('element ' .. index) end
+layouter.prepare({x = 0, y = 0, direction = 'horizontal', padding = PADDING})
+check('overflow flag is false when everything fits', layouter._overflowing == false)
+layouter.prepare({overflow = 'wrap', min_width = WINDOW_WIDTH})
+check('overflow flag is false for three stacked rows', layouter._overflowing == false)
+layouter.reset()
+for index = 1, 40 do layouter.add('element ' .. index) end
+layouter.prepare({x = 0, y = 0, direction = 'horizontal', padding = PADDING, overflow = 'wrap',
+    min_width = WINDOW_WIDTH})
+check('overflow flag is true when the tracks run over', layouter._overflowing == true)
+
 -- manually positioned elements do not consume auto space -------------------
 layouter.reset()
 layouter.add({content = 'fixed', x = 10, y = 10})

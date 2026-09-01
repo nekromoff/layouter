@@ -124,6 +124,7 @@ Content is also vertically centered inside the element box, wrapped multi-line t
 | `background` | background from `initialize()` | button fill color while hovered, `{r, g, b}` in 0-255 |
 | `align` | `'center'` | `left`, `center`, `right`, `justify` |
 | `callback` | `false` | function called on click (buttons) |
+| `group` | none | name of the row/column this element belongs to (see below) |
 | `x`, `y` | automatic | fixed pixel position |
 | `width`, `height` | automatic | fixed pixel size |
 | `column`, `row` | automatic | fixed position in grid cells (see below) |
@@ -143,12 +144,52 @@ layouter.prepare({x = layouter.COLUMN6, y = layouter.ROW4, direction = 'vertical
 | `direction` | `'vertical'` | `vertical` stacks elements downwards, `horizontal` places them in a row |
 | `spacing` | from `x`/`y` to the window edge | the area the automatic elements share; `'auto'` centers them by leaving the same gap on the opposite side as before `x`/`y`, or pass an explicit `{width = ..., height = ...}` |
 | `padding` | `10` | gap in pixels around each element |
+| `overflow` | `'none'` | `'wrap'` breaks a row/column into more rows/columns instead of squeezing elements below the minimum |
+| `min_width` | none | smallest element width in a horizontal layout, wrapping happens below it |
+| `min_height` | one line of text plus padding | smallest element height in a vertical layout, wrapping happens below it |
 
 Calling `prepare` again only changes what you pass in - everything else is kept from the previous call:
 ```lua
 layouter.prepare({direction = 'horizontal'}) -- same x, y, spacing and padding as before
 ```
 `layouter.reset()` clears the elements and this remembered state.
+
+### Tracks: multiple rows and columns
+Automatic elements are laid out in **tracks** - a track is one row in a horizontal layout, one column in a
+vertical one. By default there is a single track and all elements share it, which is what a layout with a
+handful of elements wants.
+
+#### Overflow: wrapping into more tracks
+With `overflow = 'wrap'`, a track that would squeeze its elements below the minimum size is split into as many
+tracks as needed, and the tracks are balanced so the last one is not left with a single element:
+```lua
+layouter.prepare({direction = 'horizontal', overflow = 'wrap', min_width = 150})
+```
+In a vertical layout the minimum defaults to one line of text plus padding, so elements never become
+unreadably short:
+```lua
+layouter.prepare({direction = 'vertical', overflow = 'wrap'})
+```
+Nothing is ever clipped - if even the wrapped tracks do not fit into the available space, they simply run over
+and `layouter._overflowing` is set to `true`.
+
+#### Groups: adding elements into an existing row/column
+Elements sharing a `group` are laid out in one track of their own, in the order the groups first appear.
+`layouter.addTo(group, element)` is `add()` with a group:
+```lua
+layouter.addTo('menu', {content = 'Start game', type = 'button', callback = startGame})
+layouter.addTo('menu', {content = 'Credits', type = 'button', callback = showCredits})
+layouter.addTo('footer', 'v1.0')
+```
+Adding another element into an existing group later puts it into that same row/column, the rest of the row is
+resized to make space for it:
+```lua
+layouter.addTo('menu', {content = 'Quit', type = 'button', callback = love.event.quit})
+layouter.prepare()
+```
+Ungrouped elements share one implicit track. A group wraps like any other track. Fixed elements
+(`x`/`y`/`column`/`row`) are not part of any track and ignore `group`.
+Every prepared element carries its `group` and its `track` number, e.g. `layouter._layout[1].track`.
 
 ### 5. Draw your layout
 ```lua
@@ -210,6 +251,7 @@ need to be added again after a resize.
 | --- | --- |
 | `layouter.initialize(options)` | set up fonts, colors, debug mode and calculate the grid |
 | `layouter.add(element)` | add an element, returns its key |
+| `layouter.addTo(group, element)` | add an element into a group, i.e. into an existing row/column, returns its key |
 | `layouter.replace(key, element)` | replace every element with that key, keeping the key, and reflow |
 | `layouter.remove(key)` | remove every element with that key and reflow |
 | `layouter.reset()` | remove all elements and forget the remembered layout options |
@@ -226,22 +268,24 @@ need to be added again after a resize.
 | `layouter.debug` | draw the grid overlay, can be toggled at runtime |
 | `layouter.font`, `layouter.color`, `layouter.background` | defaults used by elements that do not set their own |
 | `layouter.elements` | the added elements |
-| `layouter._layout` | the prepared (positioned) elements |
+| `layouter._layout` | the prepared (positioned) elements, each with its `group` and `track` number |
+| `layouter._overflowing` | `true` when the prepared elements do not fit into the available space |
 
 ## Limitations
 
 - only the default (usually left) mouse button triggers callbacks, on press
 - no keyboard navigation and no touch handling
 - buttons have a hover state but no pressed or disabled state
-- one layout with one direction at a time; nested or mixed-direction layouts have to be built with fixed positions
+- one layout with one direction at a time: groups give you several rows (or several columns), but not rows
+  and columns at once - mixed-direction layouts have to be built with fixed positions
 - elements are not clipped or scrolled - content larger than its box overflows
 
 ## Tests
 
 `test/` contains a LÖVE demo app and a headless unit test suite.
 
-The demo shows a fixed title plus an automatic menu, switches direction with SPACE and toggles the debug grid
-with D:
+The demo shows a fixed title plus an automatic menu group. SPACE switches direction, W toggles overflow
+wrapping, A adds another element into the menu, R removes the last one and D toggles the debug grid:
 ```
 love test
 ```
